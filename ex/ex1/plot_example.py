@@ -5,9 +5,15 @@ import matplotlib.pyplot as plt
 data = pd.read_csv(r"C:\path\to\output.csv")
 data = data.to_numpy()
 
-l1_size = 0
-l2_size = 0
-l3_size = 0
+KiB = 2**10
+MiB=2**20
+
+l1_size = 192*KiB / 6
+l2_size = 1.5*MiB / 6
+l3_size = 9 *MiB
+
+
+
 
 plt.plot(data[:, 0], data[:, 1], label="Random access")
 plt.plot(data[:, 0], data[:, 2], label="Sequential access")

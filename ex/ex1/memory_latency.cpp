@@ -2,9 +2,12 @@
 
 #include "memory_latency.h"
 #include "measure.h"
+#include <cmath>
+#include <iostream>
 
 #define GALOIS_POLYNOMIAL ((1ULL << 63) | (1ULL << 62) | (1ULL << 60) | (1ULL << 59))
 
+#define MIN_SIZE 100;
 /**
  * Converts the struct timespec to time in nano-seconds.
  * @param t - the struct timespec to convert.
@@ -12,7 +15,7 @@
  */
 uint64_t nanosectime(struct timespec t)
 {
-	// Your code here
+	return (uint64_t )t.tv_sec * pow(10,9) + (uint64_t )t.tv_nsec;
 }
 
 /**
@@ -28,7 +31,43 @@ uint64_t nanosectime(struct timespec t)
 */
 struct measurement measure_sequential_latency(uint64_t repeat, array_element_t* arr, uint64_t arr_size, uint64_t zero)
 {
-    // Your code here
+    repeat = arr_size > repeat ? arr_size:repeat; // Make sure repeat >= arr_size
+
+    // Baseline measurement:
+    struct timespec t0;
+    timespec_get(&t0, TIME_UTC);
+    register uint64_t rnd=12345;
+    for (register uint64_t i = 0; i < repeat; i++)
+    {
+        register uint64_t index = i % arr_size;
+        rnd ^= (index & zero) ^ (i%arr_size);
+        rnd = (rnd >> 1) ^ ((0-(rnd & 1)) & GALOIS_POLYNOMIAL);  // Advance rnd pseudo-randomly (using Galois LFSR)
+    }
+    struct timespec t1;
+    timespec_get(&t1, TIME_UTC);
+
+    // Memory access measurement:
+    struct timespec t2;
+    timespec_get(&t2, TIME_UTC);
+    rnd=(rnd & zero) ^ 12345;
+    for (register uint64_t i = 0; i < repeat; i++)
+    {
+        register uint64_t index = i % arr_size;
+        rnd ^= (arr[index] & zero) ^ (i%arr_size);
+        rnd = (rnd >> 1) ^ ((0-(rnd & 1)) & GALOIS_POLYNOMIAL);  // Advance rnd pseudo-randomly (using Galois LFSR)
+    }
+    struct timespec t3;
+    timespec_get(&t3, TIME_UTC);
+
+    // Calculate baseline and memory access times:
+    double baseline_per_cycle=(double)(nanosectime(t1)- nanosectime(t0))/(repeat);
+    double memory_per_cycle=(double)(nanosectime(t3)- nanosectime(t2))/(repeat);
+    struct measurement result;
+
+    result.baseline = baseline_per_cycle;
+    result.access_time = memory_per_cycle;
+    result.rnd = rnd;
+    return result;
 }
 
 /**
@@ -53,4 +92,27 @@ int main(int argc, char* argv[])
     const uint64_t zero = nanosectime(t_dummy)>1000000000ull?0:nanosectime(t_dummy);
 
     // Your code here
+   auto max_size = (uint64_t )std::atoi(argv[1]);
+   float factor = std::atof(argv[2]);
+   auto repeat = (uint64_t )std::atoi(argv[3]);;
+   uint64_t i=MIN_SIZE
+   while (i<max_size){
+ 
+       uint64_t * arr = (uint64_t *) malloc(sizeof(uint64_t )*i);
+       for (uint64_t j=0; j<i; j++)
+       {
+           arr[j] =j;
+       }
+       struct measurement sequential_result = measure_sequential_latency(repeat, arr, i, zero);
+       struct measurement random_result = measure_latency(repeat, arr, i, zero);
+
+       std::cout << i* sizeof(uint64_t )  << "," << random_result.access_time - random_result.baseline
+       << "," << sequential_result.access_time - sequential_result.baseline << std::endl;
+
+       free(arr);
+       i = (uint64_t) ceil(i * factor);
+
+
+   }
+   ;
 }

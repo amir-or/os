@@ -1,0 +1,3 @@
+/mnt/c/Users/amiro/OneDrive/Documents/year3/semester2/os/os/ex/ex1/cmake-build-wsl/CMakeFiles/ex1.dir
+/mnt/c/Users/amiro/OneDrive/Documents/year3/semester2/os/os/ex/ex1/cmake-build-wsl/CMakeFiles/edit_cache.dir
+/mnt/c/Users/amiro/OneDrive/Documents/year3/semester2/os/os/ex/ex1/cmake-build-wsl/CMakeFiles/rebuild_cache.dir

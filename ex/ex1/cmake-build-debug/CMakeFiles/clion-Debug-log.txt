@@ -1,0 +1,13 @@
+/usr/bin/cmake -DCMAKE_BUILD_TYPE=Debug -G "Unix Makefiles" -S /mnt/c/Users/amiro/OneDrive/Documents/year3/semester2/os/os/ex/ex1 -B /mnt/c/Users/amiro/OneDrive/Documents/year3/semester2/os/os/ex/ex1/cmake-build-debug
+CMake Error at CMakeLists.txt:1 (cmake_minimum_required):
+  CMake 3.30 or higher is required.  You are running version 3.28.3
+
+
+-- Configuring incomplete, errors occurred!
+
+Cannot get compiler information:
+	Compiler exited with error code 1: C:\Program Files\JetBrains\CLion 2024.3.4\bin\mingw\bin\g++.exe -xc++ -g -std=gnu++11 -fpch-preprocess -v -dD -E
+	g++.exe: fatal error: cannot execute 'ld': CreateProcess: No such file or directory
+	compilation terminated.
+	
+	

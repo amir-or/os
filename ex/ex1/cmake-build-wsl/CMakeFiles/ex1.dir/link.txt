@@ -1,0 +1,1 @@
+/usr/bin/c++ -g CMakeFiles/ex1.dir/measure.cpp.o CMakeFiles/ex1.dir/memory_latency.cpp.o -o ex1 
