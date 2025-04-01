@@ -38,9 +38,9 @@ struct measurement measure_sequential_latency(uint64_t repeat, array_element_t* 
     timespec_get(&t0, TIME_UTC);
     register uint64_t rnd=12345;
     for (register uint64_t i = 0; i < repeat; i++)
-    {
+    {;
         register uint64_t index = i % arr_size;
-        rnd ^= (index & zero) ^ (i%arr_size);
+        rnd ^= (index & zero) ^ (index % rnd);
         rnd = (rnd >> 1) ^ ((0-(rnd & 1)) & GALOIS_POLYNOMIAL);  // Advance rnd pseudo-randomly (using Galois LFSR)
     }
     struct timespec t1;
@@ -53,7 +53,7 @@ struct measurement measure_sequential_latency(uint64_t repeat, array_element_t* 
     for (register uint64_t i = 0; i < repeat; i++)
     {
         register uint64_t index = i % arr_size;
-        rnd ^= (arr[index] & zero) ^ (i%arr_size);
+        rnd ^= (arr[index] & zero)^ (index % rnd);
         rnd = (rnd >> 1) ^ ((0-(rnd & 1)) & GALOIS_POLYNOMIAL);  // Advance rnd pseudo-randomly (using Galois LFSR)
     }
     struct timespec t3;
@@ -92,27 +92,59 @@ int main(int argc, char* argv[])
     const uint64_t zero = nanosectime(t_dummy)>1000000000ull?0:nanosectime(t_dummy);
 
     // Your code here
-   auto max_size = (uint64_t )std::atoi(argv[1]);
-   float factor = std::atof(argv[2]);
-   auto repeat = (uint64_t )std::atoi(argv[3]);;
-   uint64_t i=MIN_SIZE
-   while (i<max_size){
- 
-       uint64_t * arr = (uint64_t *) malloc(sizeof(uint64_t )*i);
-       for (uint64_t j=0; j<i; j++)
-       {
-           arr[j] =j;
-       }
-       struct measurement sequential_result = measure_sequential_latency(repeat, arr, i, zero);
-       struct measurement random_result = measure_latency(repeat, arr, i, zero);
 
-       std::cout << i* sizeof(uint64_t )  << "," << random_result.access_time - random_result.baseline
-       << "," << sequential_result.access_time - sequential_result.baseline << std::endl;
+    try {
+        if (argc != 4) {
+            std::cerr << "Usage: " << argv[0] << " max_size factor repeat\n";
+            return EXIT_FAILURE;
+        }
 
-       free(arr);
-       i = (uint64_t) ceil(i * factor);
+        uint64_t max_size = std::stoull(argv[1]);
+        float factor = std::stof(argv[2]);
+        uint64_t repeat = std::stoull(argv[3]);
+
+        if (factor <= 1.0f) {
+            throw std::invalid_argument("factor must be > 1.0");
+        }
+        if (repeat <=0){
+            throw std::invalid_argument("repeat must be a positive integer");
+        }
+        if (max_size <100){
+            throw std::invalid_argument("max size must be bigger than 100");
+        }
+
+        uint64_t i=MIN_SIZE;
+        while (i<max_size){
+
+            uint64_t * arr = (uint64_t *) malloc(i);
+
+            for (uint64_t j=0; j<(i/ sizeof(uint64_t) ); j++)
+            {
+                arr[j] = j+1;
+            }
+
+
+            struct measurement sequential_result =
+                    measure_sequential_latency(repeat, arr, i/ (sizeof(uint64_t )), zero);
+            struct measurement random_result =
+                    measure_latency(repeat, arr, i/(sizeof (uint64_t)), zero);
+
+            std::cout << i << "," << random_result.access_time - random_result.baseline
+                      << "," << sequential_result.access_time - sequential_result.baseline << std::endl;
+
+            free(arr);
+            i = (uint64_t) ceil(i * factor);
+        }
+
+
+    } catch (const std::exception& e) {
+        std::cerr << "Argument error: " << e.what() << std::endl;
+        exit(-1);
+    }
+
+
+
 
 
    }
-   ;
-}
+
