@@ -38,7 +38,7 @@ struct measurement measure_sequential_latency(uint64_t repeat, array_element_t* 
     timespec_get(&t0, TIME_UTC);
     register uint64_t rnd=12345;
     for (register uint64_t i = 0; i < repeat; i++)
-    {;
+    {
         register uint64_t index = i % arr_size;
         rnd ^= (index & zero) ^ (index % rnd);
         rnd = (rnd >> 1) ^ ((0-(rnd & 1)) & GALOIS_POLYNOMIAL);  // Advance rnd pseudo-randomly (using Galois LFSR)
@@ -99,15 +99,16 @@ int main(int argc, char* argv[])
             return EXIT_FAILURE;
         }
 
+        if (argv[3][0] == '-' || argv[3][0] == '0') {
+            throw std::invalid_argument("repeat must be > 0");
+        }
+
         uint64_t max_size = std::stoull(argv[1]);
         float factor = std::stof(argv[2]);
         uint64_t repeat = std::stoull(argv[3]);
 
         if (factor <= 1.0f) {
             throw std::invalid_argument("factor must be > 1.0");
-        }
-        if (repeat <=0){
-            throw std::invalid_argument("repeat must be a positive integer");
         }
         if (max_size <100){
             throw std::invalid_argument("max size must be bigger than 100");
