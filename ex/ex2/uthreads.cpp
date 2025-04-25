@@ -76,11 +76,11 @@ void error_handler(std::string msg, int error_type) {
     std::cerr << LIBRARY_ERROR_MSG << msg << std::endl;
 }
 
-void move_to_next(bool should_delete_cur=false) {
+void move_to_next(bool should_delete_thread=false) {
   	//save current state of running thread
     if (sigsetjmp(thread_map[running_tid]->context, 1)==0){
-        //change the state of the current first in queue thread and pop it
-        if (should_delete_cur) {
+        if (should_delete_thread) {
+            delete thread_map[running_tid];
             thread_map.erase(running_tid);
         }
         Thread* next_thread = thread_map[ready_queue.front()];
@@ -89,12 +89,13 @@ void move_to_next(bool should_delete_cur=false) {
         running_tid = next_thread -> id;
         thread_map[running_tid] -> increase_quantums();
         siglongjmp(next_thread -> context, 1);
-    } return;
+    }
 
 
 }
 
 void reset_timer() {
+    if (setitimer(ITIMER_VIRTUAL, &timer, nullptr))
     if (setitimer(ITIMER_VIRTUAL, &timer, nullptr))
     {
         error_handler("problem setting timer", SYSTEM_ERROR_IND);
@@ -105,6 +106,7 @@ void reset_timer() {
 }
 
 void timer_handler(int sig) {
+    TIMER_OFF
     // Step 1: Wake sleeping threads whose timers expired
     std::vector<int> expired;
     for (auto& [tid, counter] : sleeping_map) {
@@ -133,11 +135,13 @@ void timer_handler(int sig) {
         // Switch to next thread
         thread_map[running_tid] -> state = ThreadState::READY;
         ready_queue.push(running_tid);
+        TIMER_ON
         move_to_next();
     } else {
         thread_map[running_tid] -> increase_quantums();
     }
     total_quantums++;
+    TIMER_ON
 }
 
 
@@ -269,16 +273,15 @@ int uthread_terminate(int tid) {
         remove_from_ready_queue(thread->id);
     }
 
-    ThreadState state = thread -> state;
-    delete[] thread_map[tid] -> stack;
 
     sleeping_map.erase(tid);
     free_tids.push(tid);
 
-    if (state == ThreadState::RUNNING) {
+    if (thread_map[tid] -> state == ThreadState::RUNNING) {
         TIMER_ON
         reset_timer();
         move_to_next(true);
+
     }
     TIMER_ON
     return 0;
@@ -331,11 +334,11 @@ int uthread_sleep(int num_quantums) {
         error_handler("can't block main thread", LIBRARY_ERROR_IND);
         return -1;
     }
-    sleeping_map[running_tid] = num_quantums+1;
+    sleeping_map[running_tid] = num_quantums;
     thread_map[running_tid] -> state = ThreadState::BLOCKED;
+    TIMER_ON
     reset_timer();
     move_to_next();
-    TIMER_ON
     return 0;
 }
 
