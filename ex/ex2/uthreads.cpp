@@ -32,6 +32,9 @@
 
 static struct itimerval timer;
 
+// a Thread pointer to delete from
+static Thread* pending_delete = nullptr;
+
 // ID-to-thread mapping
 static std::unordered_map<int, Thread*> thread_map;
 
@@ -79,10 +82,13 @@ void error_handler(std::string msg, int error_type) {
 void move_to_next(bool should_delete_thread=false) {
   	//save current state of running thread
     if (sigsetjmp(thread_map[running_tid]->context, 1)==0){
-        if (should_delete_thread) {
-            delete thread_map[running_tid];
-            thread_map.erase(running_tid);
+        TIMER_OFF;
+        if (pending_delete!=nullptr) {
+            delete[] thread_map[running_tid] -> stack;
+            thread_map[running_tid] -> stack = nullptr;
+            pending_delete = nullptr;
         }
+        TIMER_ON;
         Thread* next_thread = thread_map[ready_queue.front()];
         ready_queue.pop();
         next_thread -> state = ThreadState::RUNNING;
@@ -259,6 +265,8 @@ bool tid_exists(int tid) {
 }
 
 
+
+
 int uthread_terminate(int tid) {
     TIMER_OFF
     if (!tid_exists(tid)) {
@@ -279,10 +287,15 @@ int uthread_terminate(int tid) {
 
     if (thread_map[tid] -> state == ThreadState::RUNNING) {
         TIMER_ON
+        pending_delete = thread_map[tid];
         reset_timer();
-        move_to_next(true);
+        move_to_next();
 
+    }else{
+	    delete[] thread_map[tid] -> stack;
+        thread_map[tid] -> stack = nullptr;
     }
+
     TIMER_ON
     return 0;
 }
