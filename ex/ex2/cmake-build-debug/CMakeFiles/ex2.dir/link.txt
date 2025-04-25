@@ -1,0 +1,1 @@
+/usr/bin/c++ -g CMakeFiles/ex2.dir/test0_sanity.cpp.o CMakeFiles/ex2.dir/uthreads.cpp.o CMakeFiles/ex2.dir/thread_manager.cpp.o CMakeFiles/ex2.dir/thread.cpp.o CMakeFiles/ex2.dir/alarm.cpp.o -o ex2 

@@ -7,6 +7,7 @@
 #include <csetjmp>
 #include <string>
 #include "uthreads.h"
+#include "thread.h"
 
 #include <cassert>
 #include <iostream>
@@ -14,25 +15,23 @@
 #include <stdbool.h>
 #include <unordered_map>
 
+
 #define SYSTEM_ERROR_MSG "system error: "
 #define LIBRARY_ERROR_MSG "thread library error: "
 #define SYSTEM_ERROR_IND 0
 #define LIBRARY_ERROR_IND 1
+#define SECOND 1000000
 
-typedef enum { RUNNING, READY, BLOCKED } ThreadState;
+#define TIMER_ON sigprocmask(SIG_UNBLOCK, &timer_sigset, NULL);
+#define TIMER_OFF sigprocmask(SIG_BLOCK, &timer_sigset, NULL);
 
 
-typedef struct {
-    int id;
-    ThreadState state;
-    thread_entry_point entry;
-    char* stack;
-    sigjmp_buf context;
-} Thread;
+
+
 
 
 static struct itimerval timer;
-int cur_tid;
+
 // ID-to-thread mapping
 static std::unordered_map<int, Thread*> thread_map;
 
@@ -40,109 +39,133 @@ static std::unordered_map<int, Thread*> thread_map;
 static std::queue<int> ready_queue;
 
 // Min-heap of free thread IDs
-static std::priority_queue<int, std::vector<int>, std::greater<int>> free_tids;
+static std::priority_queue<int, std::vector<int>, std::greater<>> free_tids;
+
+// map for sleeping threads
+
+static std::unordered_map<int, int> sleeping_map;
+
+// queue for awakening threads from sleep
+
+static std::queue<int> wake_queue;
 
 int running_tid;
+static int total_quantums;
 
-#ifdef __x86_64__
-/* code for 64 bit Intel arch */
+// signal set for timer
+sigset_t timer_sigset;
 
-typedef unsigned long address_t;
-#define JB_SP 6
-#define JB_PC 7
 
-/* A translation is required when using an address of a variable.
-   Use this as a black box in your code. */
-address_t translate_address(address_t addr)
-{
-    address_t ret;
-    asm volatile("xor    %%fs:0x30,%0\n"
-        "rol    $0x11,%0\n"
-                 : "=g" (ret)
-                 : "0" (addr));
-    return ret;
+void free_resources() {
+    for (auto it : thread_map) {
+        delete it.second;
+    }
+    thread_map.clear();
 }
-
-#else
-/* code for 32 bit Intel arch */
-
-typedef unsigned int address_t;
-#define JB_SP 4
-#define JB_PC 5
-
-
-/* A translation is required when using an address of a variable.
-   Use this as a black box in your code. */
-address_t translate_address(address_t addr)
-{
-    address_t ret;
-    asm volatile("xor    %%gs:0x18,%0\n"
-                 "rol    $0x9,%0\n"
-    : "=g" (ret)
-    : "0" (addr));
-    return ret;
-}
-
-
-#endif
 
 /*
  *ERROR_TYPE: 0 if system error, 1 else
  *
  */
-void error_handler(std::string msg, int ERROR_TYPE) {
-    if (ERROR_TYPE == SYSTEM_ERROR_IND) {
+void error_handler(std::string msg, int error_type) {
+    if (error_type == SYSTEM_ERROR_IND) {
         std::cerr << SYSTEM_ERROR_MSG << msg << std::endl;
+        free_resources();
         exit(1);
     }
     std::cerr << LIBRARY_ERROR_MSG << msg << std::endl;
-
 }
 
-void timer_handler(int sig) {
-    if (ready_queue.size() > 1) {
-
-        Thread* thread = thread_map[running_tid];
-        assert(thread -> state == RUNNING);
-        thread->state = READY;
-        // add to the end of the queue
-        ready_queue.push(running_tid);
-
+void move_to_next() {
+  	//save current state of running thread
+    if (sigsetjmp(thread_map[running_tid]->context, 0)==0){
         //change the state of the current first in queue thread and pop it
         Thread* next_thread = thread_map[ready_queue.front()];
         ready_queue.pop();
-        next_thread -> state = RUNNING;
+        next_thread -> state = ThreadState::RUNNING;
         running_tid = next_thread -> id;
-
+        thread_map[running_tid] -> increase_quantums();
+        TIMER_ON;
+        siglongjmp(next_thread -> context, 1);
     }
+
+
+}
+
+void reset_timer() {
+    if (setitimer(ITIMER_VIRTUAL, &timer, nullptr))
+    {
+        error_handler("problem setting timer", SYSTEM_ERROR_IND);
+        free_resources();
+        exit(1);
+    }
+    total_quantums++;
+}
+
+void timer_handler(int sig) {
+    // Step 1: Wake sleeping threads whose timers expired
+    std::vector<int> expired;
+    for (auto& [tid, counter] : sleeping_map) {
+        if (--sleeping_map[tid] == 0) {
+            expired.push_back(tid);
+        }
+    }
+    for (int tid : expired) {
+        sleeping_map.erase(tid);
+        wake_queue.push(tid);
+    }
+
+    // Step 2: Move waking threads to READY state
+    while (!wake_queue.empty()) {
+        int tid = wake_queue.front();
+        wake_queue.pop();
+        Thread* thread = thread_map[tid];
+        thread->state = ThreadState::READY;
+        ready_queue.push(tid);
+    }
+
+    // Step 3: Context switch if needed
+    if (!ready_queue.empty()) {
+        Thread* cur = thread_map[running_tid];
+        cur->state = ThreadState::READY;
+        ready_queue.push(running_tid);
+        // Switch to next thread
+        move_to_next();
+    } else {
+        thread_map[running_tid] -> increase_quantums();
+    }
+    total_quantums++;
 }
 
 
-bool timer_init(int quantum_usecs) {
+
+
+
+void timer_init(int quantum_usecs) {
     struct sigaction sa = {0};
+    sigemptyset(&timer_sigset);
+    sigaddset(&timer_sigset, SIGVTALRM);
 
 
     // Install timer_handler as the signal handler for SIGVTALRM.
     sa.sa_handler = &timer_handler;
-    if (sigaction(SIGVTALRM, &sa, NULL) < 0)
+    if (sigaction(SIGVTALRM, &sa, nullptr) < 0)
     {
         error_handler("sigaction failed", SYSTEM_ERROR_IND);
+        free_resources();
+        exit(1);
     }
 
     // Configure the timer to expire after 1 sec... */
-    timer.it_value.tv_sec = 0;        // first time interval, seconds part
-    timer.it_value.tv_usec = quantum_usecs;        // first time interval, microseconds part
+    timer.it_value.tv_sec = quantum_usecs / SECOND;        // first time interval, seconds part
+    timer.it_value.tv_usec = quantum_usecs % SECOND;        // first time interval, microseconds part
 
     // configure the timer to expire every 3 sec after that.
-    timer.it_interval.tv_sec = 0;    // following time intervals, seconds part
-    timer.it_interval.tv_usec = quantum_usecs;    // following time intervals, microseconds part
+    timer.it_interval.tv_sec = quantum_usecs / SECOND;    // following time intervals, seconds part
+    timer.it_interval.tv_usec = quantum_usecs % SECOND;    // following time intervals, microseconds part
 
-    if (setitimer(ITIMER_VIRTUAL, &timer, NULL))
-    {
-        error_handler("problem setting timer", SYSTEM_ERROR_IND);
-        return false;
-    }
-    return true;
+    reset_timer();
+
 }
 
 int get_tid() {
@@ -157,20 +180,161 @@ int get_tid() {
 }
 
 int uthread_init(int quantum_usecs) {
-    timer_init(quantum_usecs);
+    if (quantum_usecs <= 0) {
+        error_handler("quantum_usecs must be positive", SYSTEM_ERROR_IND);
+        return -1;
+    }
 
-    auto* main_thread = new Thread;
 
-
-
-    main_thread->id = get_tid();
-    main_thread->state = RUNNING;
-    main_thread->entry = nullptr;
-    main_thread->stack = nullptr;
+    auto* main_thread = new Thread(get_tid(), ThreadState::RUNNING, nullptr);
     thread_map[main_thread->id] = main_thread;
     running_tid = main_thread->id;
+    main_thread -> increase_quantums();
+
+    timer_init(quantum_usecs);
 
     return 0;
 }
+
+
+
+
+int uthread_spawn(thread_entry_point entry_point) {
+    Thread* thread = nullptr;
+    if (entry_point == nullptr) {
+        error_handler("entry_point is null", LIBRARY_ERROR_IND);
+        return -1;
+    }
+    if (thread_map.size() == MAX_THREAD_NUM) {
+        error_handler("thread_map is full", LIBRARY_ERROR_IND);
+        return -1;
+    }
+    try {
+
+        thread = new Thread(get_tid(), ThreadState::READY, entry_point);
+        thread_map[thread -> id] = thread;
+        ready_queue.push(thread -> id);
+
+        return thread->id;
+    } catch (const std::exception& e) {
+        error_handler(e.what(), SYSTEM_ERROR_IND);
+    }
+}
+
+void remove_from_ready_queue(int tid_to_remove) {
+    std::queue<int> temp;
+    while (!ready_queue.empty()) {
+        int tid = ready_queue.front();
+        ready_queue.pop();
+        if (tid != tid_to_remove) {
+            temp.push(tid);
+        }
+    }
+    ready_queue = std::move(temp);
+}
+
+
+bool tid_exists(int tid) {
+    if (thread_map.find(tid) == thread_map.end()) {
+        error_handler("tid not found", LIBRARY_ERROR_IND);
+        return false;
+    }
+    return true;
+}
+
+
+int uthread_terminate(int tid) {
+
+    if (!tid_exists(tid)) {
+        return -1;
+    }
+    if (tid==0) {
+        free_resources();
+        exit(0);
+    }
+    Thread* thread = thread_map[tid];
+    if (thread->state == ThreadState::READY) {
+        remove_from_ready_queue(thread->id);
+    }
+    if (thread -> state == ThreadState::RUNNING) {
+        reset_timer();
+        move_to_next();
+    }
+    delete thread_map[tid];
+    thread_map.erase(tid);
+    free_tids.push(tid);
+
+    return 0;
+}
+
+int uthread_block(int tid) {
+
+    if (!tid_exists(tid)) {
+        return -1;
+    }
+    if (tid == 0) {
+        error_handler("cannot block main thread", LIBRARY_ERROR_IND);
+        return -1;
+    }
+    if (running_tid == tid) {
+        reset_timer();
+        move_to_next();
+    }
+    if (thread_map[tid] -> state == ThreadState::READY) {
+        remove_from_ready_queue(tid);
+    }
+    thread_map[tid] -> state = ThreadState::BLOCKED;
+
+    return 0;
+}
+
+int uthread_resume(int tid) {
+
+    if (!tid_exists(tid)) {
+        return -1;
+    }
+    switch (thread_map[tid] -> state) {
+        case ThreadState::READY:
+            break;
+        case ThreadState::BLOCKED:
+            thread_map[tid] -> state = ThreadState::READY;
+            ready_queue.push(tid);
+        case ThreadState::RUNNING:
+            break;
+    }
+
+    return 0;
+}
+
+int uthread_sleep(int num_quantums) {
+
+    if (running_tid == 0) {
+        error_handler("can't block main thread", LIBRARY_ERROR_IND);
+        return -1;
+    }
+    sleeping_map[running_tid] = num_quantums;
+    thread_map[running_tid] -> state = ThreadState::BLOCKED;
+
+    return 0;
+}
+
+int uthread_get_tid() {
+    return running_tid;
+}
+
+
+int uthread_get_total_quantums() {
+    return total_quantums;
+
+}
+
+int uthread_get_quantums(int tid) {
+    if (!tid_exists(tid)) {
+        return -1;
+    }
+    return thread_map[tid]->get_quantums();
+}
+
+
 
 
