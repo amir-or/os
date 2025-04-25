@@ -34,14 +34,23 @@ address_t translate_address(address_t addr) {
 #endif
 
 Thread::Thread(int tid, ThreadState state, thread_entry_point entry)
-    : id(tid), state(state), entry(entry), stack(new char[STACK_SIZE])
+    : id(tid), state(state), entry(entry), stack(nullptr)
 {
-    address_t sp = (address_t) stack + STACK_SIZE - sizeof(address_t);
-    address_t pc = (address_t) entry;
-    sigsetjmp(context, 0);
-    context->__jmpbuf[JB_SP] = translate_address(sp);
-    context->__jmpbuf[JB_PC] = translate_address(pc);
     total_quantums = 0;
+
+    if (tid != 0) {
+        // Regular (spawned) thread
+        stack = new char[STACK_SIZE];
+        address_t sp = (address_t)stack + STACK_SIZE - sizeof(address_t);
+        address_t pc = (address_t)entry;
+        sigsetjmp(context, 1);
+
+        // Set stack pointer and program counter manually
+        context->__jmpbuf[JB_SP] = translate_address(sp);
+        context->__jmpbuf[JB_PC] = translate_address(pc);
+        sigemptyset(&context->__saved_mask);  // Also reset signal mask
+    }
+    is_blocked = false;
 }
 
 

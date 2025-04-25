@@ -76,18 +76,20 @@ void error_handler(std::string msg, int error_type) {
     std::cerr << LIBRARY_ERROR_MSG << msg << std::endl;
 }
 
-void move_to_next() {
+void move_to_next(bool should_delete_cur=false) {
   	//save current state of running thread
-    if (sigsetjmp(thread_map[running_tid]->context, 0)==0){
+    if (sigsetjmp(thread_map[running_tid]->context, 1)==0){
         //change the state of the current first in queue thread and pop it
+        if (should_delete_cur) {
+            thread_map.erase(running_tid);
+        }
         Thread* next_thread = thread_map[ready_queue.front()];
         ready_queue.pop();
         next_thread -> state = ThreadState::RUNNING;
         running_tid = next_thread -> id;
         thread_map[running_tid] -> increase_quantums();
-        TIMER_ON;
         siglongjmp(next_thread -> context, 1);
-    }
+    } return;
 
 
 }
@@ -112,7 +114,9 @@ void timer_handler(int sig) {
     }
     for (int tid : expired) {
         sleeping_map.erase(tid);
-        wake_queue.push(tid);
+        if (!thread_map[tid]->is_blocked) {
+            wake_queue.push(tid);
+        }
     }
 
     // Step 2: Move waking threads to READY state
@@ -126,10 +130,9 @@ void timer_handler(int sig) {
 
     // Step 3: Context switch if needed
     if (!ready_queue.empty()) {
-        Thread* cur = thread_map[running_tid];
-        cur->state = ThreadState::READY;
-        ready_queue.push(running_tid);
         // Switch to next thread
+        thread_map[running_tid] -> state = ThreadState::READY;
+        ready_queue.push(running_tid);
         move_to_next();
     } else {
         thread_map[running_tid] -> increase_quantums();
@@ -166,6 +169,7 @@ void timer_init(int quantum_usecs) {
 
     reset_timer();
 
+
 }
 
 int get_tid() {
@@ -190,6 +194,11 @@ int uthread_init(int quantum_usecs) {
     thread_map[main_thread->id] = main_thread;
     running_tid = main_thread->id;
     main_thread -> increase_quantums();
+    // Now save the real environment of the main thread
+    if (sigsetjmp(main_thread->context, 1) != 0) {
+        // If we return here from siglongjmp, just return
+        return 0;
+    }
 
     timer_init(quantum_usecs);
 
@@ -210,14 +219,17 @@ int uthread_spawn(thread_entry_point entry_point) {
         return -1;
     }
     try {
+        TIMER_OFF
 
         thread = new Thread(get_tid(), ThreadState::READY, entry_point);
         thread_map[thread -> id] = thread;
         ready_queue.push(thread -> id);
+        TIMER_ON
 
         return thread->id;
     } catch (const std::exception& e) {
         error_handler(e.what(), SYSTEM_ERROR_IND);
+        return -1;
     }
 }
 
@@ -244,7 +256,7 @@ bool tid_exists(int tid) {
 
 
 int uthread_terminate(int tid) {
-
+    TIMER_OFF
     if (!tid_exists(tid)) {
         return -1;
     }
@@ -256,19 +268,24 @@ int uthread_terminate(int tid) {
     if (thread->state == ThreadState::READY) {
         remove_from_ready_queue(thread->id);
     }
-    if (thread -> state == ThreadState::RUNNING) {
-        reset_timer();
-        move_to_next();
-    }
-    delete thread_map[tid];
-    thread_map.erase(tid);
+
+    ThreadState state = thread -> state;
+    delete[] thread_map[tid] -> stack;
+
+    sleeping_map.erase(tid);
     free_tids.push(tid);
 
+    if (state == ThreadState::RUNNING) {
+        TIMER_ON
+        reset_timer();
+        move_to_next(true);
+    }
+    TIMER_ON
     return 0;
 }
 
 int uthread_block(int tid) {
-
+    TIMER_OFF
     if (!tid_exists(tid)) {
         return -1;
     }
@@ -276,45 +293,49 @@ int uthread_block(int tid) {
         error_handler("cannot block main thread", LIBRARY_ERROR_IND);
         return -1;
     }
-    if (running_tid == tid) {
-        reset_timer();
-        move_to_next();
-    }
     if (thread_map[tid] -> state == ThreadState::READY) {
         remove_from_ready_queue(tid);
     }
     thread_map[tid] -> state = ThreadState::BLOCKED;
-
+    thread_map[tid] -> is_blocked = true;
+    if (running_tid == tid) {
+        TIMER_ON
+        reset_timer();
+        move_to_next();
+    }
+    TIMER_ON
     return 0;
 }
 
 int uthread_resume(int tid) {
+    TIMER_OFF
 
     if (!tid_exists(tid)) {
         return -1;
     }
-    switch (thread_map[tid] -> state) {
-        case ThreadState::READY:
-            break;
-        case ThreadState::BLOCKED:
+    if (thread_map[tid] -> is_blocked == true) {
+        thread_map[tid] -> is_blocked = false;
+        if (sleeping_map.find(tid) == sleeping_map.end()) {
             thread_map[tid] -> state = ThreadState::READY;
             ready_queue.push(tid);
-        case ThreadState::RUNNING:
-            break;
+        }
     }
+    TIMER_ON
 
     return 0;
 }
 
 int uthread_sleep(int num_quantums) {
-
+    TIMER_OFF
     if (running_tid == 0) {
         error_handler("can't block main thread", LIBRARY_ERROR_IND);
         return -1;
     }
-    sleeping_map[running_tid] = num_quantums;
+    sleeping_map[running_tid] = num_quantums+1;
     thread_map[running_tid] -> state = ThreadState::BLOCKED;
-
+    reset_timer();
+    move_to_next();
+    TIMER_ON
     return 0;
 }
 
