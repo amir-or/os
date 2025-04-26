@@ -12,7 +12,6 @@
 #include <cassert>
 #include <iostream>
 #include <queue>
-#include <stdbool.h>
 #include <unordered_map>
 
 
@@ -42,7 +41,7 @@ static std::unordered_map<int, Thread*> thread_map;
 static std::queue<int> ready_queue;
 
 // Min-heap of free thread IDs
-static std::priority_queue<int, std::vector<int>, std::greater<>> free_tids;
+static std::priority_queue<int, std::vector<int>, std::greater<int>> free_tids;
 
 // map for sleeping threads
 
@@ -79,16 +78,16 @@ void error_handler(std::string msg, int error_type) {
     std::cerr << LIBRARY_ERROR_MSG << msg << std::endl;
 }
 
-void move_to_next(bool should_delete_thread=false) {
+void move_to_next() {
   	//save current state of running thread
     if (sigsetjmp(thread_map[running_tid]->context, 1)==0){
-        TIMER_OFF;
+        TIMER_OFF
         if (pending_delete!=nullptr) {
             delete[] thread_map[running_tid] -> stack;
             thread_map[running_tid] -> stack = nullptr;
             pending_delete = nullptr;
         }
-        TIMER_ON;
+        TIMER_ON
         Thread* next_thread = thread_map[ready_queue.front()];
         ready_queue.pop();
         next_thread -> state = ThreadState::RUNNING;
@@ -102,7 +101,6 @@ void move_to_next(bool should_delete_thread=false) {
 
 void reset_timer() {
     if (setitimer(ITIMER_VIRTUAL, &timer, nullptr))
-    if (setitimer(ITIMER_VIRTUAL, &timer, nullptr))
     {
         error_handler("problem setting timer", SYSTEM_ERROR_IND);
         free_resources();
@@ -115,7 +113,8 @@ void timer_handler(int sig) {
     TIMER_OFF
     // Step 1: Wake sleeping threads whose timers expired
     std::vector<int> expired;
-    for (auto& [tid, counter] : sleeping_map) {
+    for (auto& pair : sleeping_map) {
+        int tid = pair.first;
         if (--sleeping_map[tid] == 0) {
             expired.push_back(tid);
         }
