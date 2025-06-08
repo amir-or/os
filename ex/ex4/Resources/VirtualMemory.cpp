@@ -185,44 +185,44 @@ void VMinitialize(){
 }
 
 
+
+/*
+ * tries to go down the tree based on the binary virtual address
+ */
 uint64_t downTheTree(uint64_t virtualAddress)
 {
-    uint64_t curr_frame = 0;                           // root
-
-    /* walk root + two more tables */
-    for (int level = 0; level < TABLES_DEPTH - 1; ++level) {
-        uint64_t shift = OFFSET_WIDTH * (TABLES_DEPTH - 1 - level);
-        uint64_t index = (virtualAddress >> shift) & (PAGE_SIZE - 1);
-        uint64_t paddr = physicalAddress(curr_frame, index);
+    uint64_t curr_frame = 0;                 // root = frame 0
+    for (int level = 0; level < TABLES_DEPTH  ; level++)  {   // ←-1 here
+        uint64_t shift  = OFFSET_WIDTH * (TABLES_DEPTH - level);
+        uint64_t index  = (virtualAddress >> shift) & (PAGE_SIZE - 1);
+        uint64_t paddr  = physicalAddress(curr_frame, index);
 
         word_t next;
         PMread(paddr, &next);
-        if (next == 0) {                              // need a TABLE
+        if (next == 0 ) {                    // missing table, allocate one
             next = allocateFrame(virtualAddress);
             PMwrite(paddr, next);
-            clearFrame(next);
-            printf("created table %d\n", next);
+            if (level != TABLES_DEPTH-1) {
+                clearFrame(next);
+                printf("created table %d\n", next);
+            }
+            else {
+                printf("created data frame %d\n", next);
+            }
+
         }
-        curr_frame = next;                            // descend
+        curr_frame = next;
     }
 
-    /* ---------- curr_frame now holds the *last table* ---------- */
-    uint64_t pageIndex  = (virtualAddress >> OFFSET_WIDTH) & (PAGE_SIZE - 1);
-    uint64_t offset     =  virtualAddress               & (PAGE_SIZE - 1);
-    uint64_t pteAddr    =  physicalAddress(curr_frame, pageIndex);
 
-    word_t pageFrame;
-    PMread(pteAddr, &pageFrame);
-    if (pageFrame == 0) {                             // need DATA page
-        pageFrame = allocateFrame(virtualAddress);
-        PMwrite(pteAddr, pageFrame);
-        printf("created data frame %d\n", pageFrame);
-        /* do NOT clear – this is user data */
-    }
 
-    PMrestore(pageFrame, virtualAddress >> OFFSET_WIDTH); // correct target
-    return physicalAddress(pageFrame, offset);            // correct address
+    PMrestore(curr_frame, virtualAddress >> OFFSET_WIDTH);  // bring it in
+    return physicalAddress(curr_frame,
+                           virtualAddress & (PAGE_SIZE - 1)); // byte offset
 }
+
+
+
 
 
 int VMread(uint64_t virtualAddress, word_t* value) {
