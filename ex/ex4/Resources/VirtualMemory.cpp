@@ -34,7 +34,7 @@ bool isZeroFrame(uint64_t frame) {
 
 
 uint64_t computeVirtualPath(uint64_t virtualAddress, int level) {
-    uint64_t shift = OFFSET_WIDTH * (TABLES_DEPTH - 1 - level);
+    uint64_t shift = OFFSET_WIDTH * (TABLES_DEPTH  - level);
     uint64_t indices = (virtualAddress >> shift) & ((1 << OFFSET_WIDTH) - 1);
     return indices;
 }
@@ -51,7 +51,7 @@ void dfs(uint64_t frame, int depth, bool still_on_path,
     }
 
     // Consider as zero candidate only if not on path to current VA
-    if (!still_on_path && isZeroFrame(frame) && zero_candidate == -1 && depth != TABLES_DEPTH) {
+    if (!still_on_path && isZeroFrame(frame) && zero_candidate == -1 && depth < TABLES_DEPTH-1) {
         zero_candidate = (int)frame;
         zero_parent = parent;
         zero_offset = parent_offset;
@@ -89,16 +89,19 @@ int allocateFrame(uint64_t virtualAddress) {
         if (zero_parent != -1 && zero_offset != -1) {
             PMwrite(zero_parent * PAGE_SIZE + zero_offset, 0);
         }
+        clearFrame(zero_candidate);
         return zero_candidate;
     }
 
     if (max_frame + 1 < NUM_FRAMES) {
         // Option 2: Use next unused frame
-        return max_frame + 1;
+        max_frame += 1;
+        return max_frame;
     }
 
-    // Option 3: eviction
-    return max_distant_leaf(virtualAddress);
+    int f = max_distant_leaf(virtualAddress);
+    clearFrame(f);                           // for a reused data page
+    return f;
 
 }
 
@@ -122,8 +125,8 @@ void find_max_distant(uint64_t frame, int depth, uint64_t current_vpage,
                       int parent = -1,
                       int parent_offset = -1)
 {
-    if (depth == TABLES_DEPTH) {
-        for (uint64_t offset = 0; offset < PAGE_SIZE; ++offset) {
+    if (depth == TABLES_DEPTH-1) {
+        for (uint64_t offset = 0; offset < PAGE_SIZE-1; ++offset) {
             word_t leaf_frame;
             PMread(physicalAddress(frame, offset), &leaf_frame);
             if (leaf_frame != 0) {
@@ -141,7 +144,7 @@ void find_max_distant(uint64_t frame, int depth, uint64_t current_vpage,
         return;
     }
 
-    for (uint64_t offset = 0; offset < PAGE_SIZE; ++offset) {
+    for (uint64_t offset = 0; offset < PAGE_SIZE-1; ++offset) {
         word_t child;
         PMread(physicalAddress(frame, offset), &child);
         if (child != 0) {
@@ -164,17 +167,18 @@ word_t max_distant_leaf(uint64_t virtualAddress)
     int evict_parent = -1;
     int evict_offset = -1;
 
+
     find_max_distant(0, 0, 0, target_vpage, best_dist, best_frame,
                      best_vpage, evict_parent, evict_offset);
+
     //unlink from parent
     if (evict_parent != -1 && evict_offset != -1)   {
         PMwrite(physicalAddress(evict_parent, evict_offset), 0);
+        PMevict(best_frame, best_vpage );
+        return best_frame;
     }
 
-    //physical eviction
-    PMevict(best_frame>> OFFSET_WIDTH, best_vpage >> OFFSET_WIDTH);
-    printf("eviction success\n");
-    return best_frame;
+    return -1;
 }
 
 
@@ -204,10 +208,8 @@ uint64_t downTheTree(uint64_t virtualAddress)
             PMwrite(paddr, next);
             if (level != TABLES_DEPTH-1) {
                 clearFrame(next);
-                printf("created table %d\n", next);
             }
             else {
-                printf("created data frame %d\n", next);
             }
 
         }
