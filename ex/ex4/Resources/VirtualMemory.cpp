@@ -1,15 +1,23 @@
-// created by Einav 6/6/2025
 #include "VirtualMemory.h"
 #include "MemoryConstants.h"
 #include "PhysicalMemory.h"
+#include <cassert>
 
 #include "stdio.h"
+#include "stdlib.h"
 
 
 word_t max_distant_leaf(uint64_t virtualAddress);
 
 uint64_t physicalAddress(uint64_t frame_num, uint64_t offset){
-    return frame_num * PAGE_SIZE + offset;
+    if (frame_num >= NUM_FRAMES) {
+        printf("Invalid frame_num: %lu\n", frame_num);
+    }
+    if (offset >= PAGE_SIZE) {
+        printf("Invalid offset: %lu\n", offset);
+    }
+    uint64_t address = frame_num * PAGE_SIZE + offset;
+    return address;
 }
 
 void clearFrame(uint64_t frame_num){
@@ -25,7 +33,7 @@ void clearFrame(uint64_t frame_num){
 bool isZeroFrame(uint64_t frame) {
     word_t val;
     for (uint64_t offset = 0; offset < PAGE_SIZE; ++offset) {
-        PMread(frame * PAGE_SIZE + offset, &val);
+        PMread(physicalAddress(frame, offset), &val);
         if (val != 0)
             return false;
     }
@@ -33,54 +41,66 @@ bool isZeroFrame(uint64_t frame) {
 }
 
 
-uint64_t computeVirtualPath(uint64_t virtualAddress, int level) {
-    uint64_t shift = OFFSET_WIDTH * (TABLES_DEPTH  - level);
-    uint64_t indices = (virtualAddress >> shift) & ((1 << OFFSET_WIDTH) - 1);
-    return indices;
+static inline uint64_t
+virt_index_at_level(uint64_t vaddr, int level)          // root == 0
+{
+    const int shift = OFFSET_WIDTH * (TABLES_DEPTH-1-level);
+    return (vaddr >> shift) & (PAGE_SIZE-1);
 }
 
 
-void dfs(uint64_t frame, int depth, bool still_on_path,
-         uint64_t virtualAddress,
-         int& max_frame,
-         int& zero_candidate, int& zero_parent, int& zero_offset,
-         int parent = -1, int parent_offset = -1) {
+void dfs(word_t     frame,             // current table frame
+         int        depth,             // 0 == root
+         bool       on_path,           // true ⇒ frame lies on access path
+         uint64_t   vaddr,             // virtual address we service
+         uint64_t&  max_frame,         // OUT
+         uint64_t&  zero_candidate,    // OUT
+         uint64_t&  zero_parent,       // OUT
+         uint64_t&  zero_offset,       // OUT
+         word_t     parent = 0,        // caller’s frame
+         uint64_t   parent_off = 0)    // … offset in that frame
+{
+    /* 1. highest frame id so far */
+    if (frame > max_frame)
+        max_frame = frame;
 
-    if ((int)frame > max_frame) {
-        max_frame = (int)frame;
+    /* 2. first empty table that is NOT on the path */
+    if (!on_path &&
+        zero_candidate == UINT64_MAX &&
+        isZeroFrame(frame))
+    {
+        zero_candidate = frame;
+        zero_parent    = parent;
+        zero_offset    = parent_off;
     }
 
-    // Consider as zero candidate only if not on path to current VA
-    if (!still_on_path && isZeroFrame(frame) && zero_candidate == -1 && depth < TABLES_DEPTH-1) {
-        zero_candidate = (int)frame;
-        zero_parent = parent;
-        zero_offset = parent_offset;
-        // Do not return — we continue to find max_frame
-    }
+    /* 3. stop *before* descending into data pages */
+    if (depth > TABLES_DEPTH-1)
+        return;
 
-    // Traverse children
-    for (uint64_t offset = 0; offset < PAGE_SIZE; ++offset) {
+    /* 4. recurse into non-null children */
+    for (uint64_t off = 0; off < PAGE_SIZE; ++off)
+    {
         word_t child;
-        PMread(frame * PAGE_SIZE + offset, &child);
-        if (child != 0 && depth < TABLES_DEPTH) {
-            bool next_is_on_path = still_on_path &&
-                                   (depth < TABLES_DEPTH) &&
-                                   (offset == computeVirtualPath(virtualAddress, depth));
+        PMread(frame*PAGE_SIZE + off, &child);
+        if (child == 0 || child >= NUM_FRAMES)          // <-- safeguard
+            continue;
 
-            dfs(child, depth + 1, next_is_on_path,
-                virtualAddress,
-                max_frame, zero_candidate, zero_parent, zero_offset,
-                frame, offset);
-        }
+        bool child_on_path = on_path &&
+                             (off == virt_index_at_level(vaddr, depth));
+
+        dfs(child, depth+1, child_on_path, vaddr,
+            max_frame, zero_candidate, zero_parent, zero_offset,
+            frame, off);
     }
 }
 
-int allocateFrame(uint64_t virtualAddress) {
+uint64_t allocateFrame(uint64_t virtualAddress) {
 
-    int max_frame = 0;
-    int zero_candidate = -1;
-    int zero_parent = -1;
-    int zero_offset = -1;
+    uint64_t max_frame = 0;
+    uint64_t zero_candidate = -1;
+    uint64_t zero_parent = -1;
+    uint64_t zero_offset = -1;
 
     dfs(0, 0, true, virtualAddress, max_frame, zero_candidate, zero_parent, zero_offset);
 
@@ -99,8 +119,12 @@ int allocateFrame(uint64_t virtualAddress) {
         return max_frame;
     }
 
-    int f = max_distant_leaf(virtualAddress);
-    clearFrame(f);                           // for a reused data page
+    uint64_t f = max_distant_leaf(virtualAddress);
+    if (f >= NUM_FRAMES) {
+        printf("BUG: allocateFrame got invalid frame %lu\n", f);
+        exit(1);
+    }
+    clearFrame(f);
     return f;
 
 }
@@ -114,23 +138,28 @@ uint64_t cyclic_distance(uint64_t v1, uint64_t v2)
     return shortest;
 }
 
-// Recursive helper for max_distant_leaf
 void find_max_distant(uint64_t frame, int depth, uint64_t current_vpage,
                       uint64_t target_vpage,
                       uint64_t& best_dist,
                       word_t& best_frame,
                       uint64_t& best_vpage,
-                      int& evict_parent,
-                      int& evict_offset,
-                      int parent = -1,
-                      int parent_offset = -1)
-{
-    if (depth == TABLES_DEPTH-1) {
-        for (uint64_t offset = 0; offset < PAGE_SIZE-1; ++offset) {
+                      uint64_t& evict_parent,
+                      uint64_t& evict_offset) {
+
+    if (depth == TABLES_DEPTH - 1) {
+        for (uint64_t offset = 0; offset < PAGE_SIZE; ++offset) {
             word_t leaf_frame;
             PMread(physicalAddress(frame, offset), &leaf_frame);
-            if (leaf_frame != 0) {
+
+            if (leaf_frame != 0 && leaf_frame < NUM_FRAMES) {
                 uint64_t candidate_vpage = (current_vpage << OFFSET_WIDTH) | offset;
+
+
+                if (candidate_vpage == target_vpage)
+                    continue;
+
+                // printf("checking distance of candidate page %lu from target page %lu\n", candidate_vpage, target_vpage);
+
                 uint64_t dist = cyclic_distance(candidate_vpage, target_vpage);
                 if (dist > best_dist) {
                     best_dist = dist;
@@ -143,42 +172,46 @@ void find_max_distant(uint64_t frame, int depth, uint64_t current_vpage,
         }
         return;
     }
-
-    for (uint64_t offset = 0; offset < PAGE_SIZE-1; ++offset) {
+    for (uint64_t offset = 0; offset < PAGE_SIZE; ++offset) {
         word_t child;
         PMread(physicalAddress(frame, offset), &child);
         if (child != 0) {
             uint64_t next_vpage = (current_vpage << OFFSET_WIDTH) | offset;
+
+
             find_max_distant(child, depth + 1, next_vpage, target_vpage,
                              best_dist, best_frame, best_vpage,
-                             evict_parent, evict_offset,
-                             frame, offset);
+                             evict_parent, evict_offset);
         }
     }
 }
 
 
-word_t max_distant_leaf(uint64_t virtualAddress)
-{
+word_t max_distant_leaf(uint64_t virtualAddress) {
     uint64_t best_dist = 0;
-    word_t best_frame = 0;
+    word_t best_frame = NUM_FRAMES;  // Start with invalid frame
     uint64_t target_vpage = virtualAddress >> OFFSET_WIDTH;
     uint64_t best_vpage = 0;
-    int evict_parent = -1;
-    int evict_offset = -1;
+    uint64_t evict_parent = -1;
+    uint64_t evict_offset = -1;
 
+    find_max_distant(0, 0, 0, target_vpage,
+                     best_dist, best_frame, best_vpage,
+                     evict_parent, evict_offset);
 
-    find_max_distant(0, 0, 0, target_vpage, best_dist, best_frame,
-                     best_vpage, evict_parent, evict_offset);
-
-    //unlink from parent
-    if (evict_parent != -1 && evict_offset != -1)   {
-        PMwrite(physicalAddress(evict_parent, evict_offset), 0);
-        PMevict(best_frame, best_vpage );
-        return best_frame;
+    if (best_frame >= NUM_FRAMES ||
+    evict_parent == (uint64_t)-1 ||
+    evict_offset == (uint64_t)-1)      // search failed
+    {
+        return UINT64_MAX;                 // propagate “no frame found”
     }
 
-    return -1;
+    PMwrite( physicalAddress(evict_parent, evict_offset), 0 );
+
+    /* now no page-table entry references best_frame */
+    PMevict( best_frame, best_vpage );    // safe: 13104 not in swapFile yet
+    return best_frame;
+
 }
 
 
@@ -196,8 +229,8 @@ void VMinitialize(){
 uint64_t downTheTree(uint64_t virtualAddress)
 {
     uint64_t curr_frame = 0;                 // root = frame 0
-    for (int level = 0; level < TABLES_DEPTH  ; level++)  {   // ←-1 here
-        uint64_t shift  = OFFSET_WIDTH * (TABLES_DEPTH - level);
+    for (int level = 0; level < TABLES_DEPTH ;++level)  {   // ←-1 here
+        uint64_t shift  = OFFSET_WIDTH * (TABLES_DEPTH - 1- level);
         uint64_t index  = (virtualAddress >> shift) & (PAGE_SIZE - 1);
         uint64_t paddr  = physicalAddress(curr_frame, index);
 
@@ -206,10 +239,9 @@ uint64_t downTheTree(uint64_t virtualAddress)
         if (next == 0 ) {                    // missing table, allocate one
             next = allocateFrame(virtualAddress);
             PMwrite(paddr, next);
-            if (level != TABLES_DEPTH-1) {
+            if (level < TABLES_DEPTH-1) {
                 clearFrame(next);
-            }
-            else {
+                assert(isZeroFrame(next));
             }
 
         }
@@ -220,7 +252,7 @@ uint64_t downTheTree(uint64_t virtualAddress)
 
     PMrestore(curr_frame, virtualAddress >> OFFSET_WIDTH);  // bring it in
     return physicalAddress(curr_frame,
-                           virtualAddress & (PAGE_SIZE - 1)); // byte offset
+                           virtualAddress & (PAGE_SIZE-1)); // byte offset
 }
 
 
@@ -249,5 +281,3 @@ int VMwrite(uint64_t virtualAddress, word_t value) {
 
     return 1;
 }
-
-
