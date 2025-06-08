@@ -172,7 +172,7 @@ word_t max_distant_leaf(uint64_t virtualAddress)
     }
 
     //physical eviction
-    PMevict(best_frame, best_vpage >> OFFSET_WIDTH);
+    PMevict(best_frame>> OFFSET_WIDTH, best_vpage >> OFFSET_WIDTH);
     printf("eviction success\n");
     return best_frame;
 }
@@ -189,43 +189,38 @@ void VMinitialize(){
 /*
  * tries to go down the tree based on the binary virtual address
  */
-uint64_t downTheTree(uint64_t virtualAddress){
-    uint64_t curr_frame = 0; // Start at root frame (frame 0)
-    uint64_t addr;
+uint64_t downTheTree(uint64_t virtualAddress)
+{
+    uint64_t curr_frame = 0;                 // root = frame 0
+    for (int level = 0; level < TABLES_DEPTH  ; level++)  {   // ←-1 here
+        uint64_t shift  = OFFSET_WIDTH * (TABLES_DEPTH - level);
+        uint64_t index  = (virtualAddress >> shift) & (PAGE_SIZE - 1);
+        uint64_t paddr  = physicalAddress(curr_frame, index);
 
-    for (int level = 0; level < TABLES_DEPTH; ++level) {
-        //extract the number which defines the offset in next table
-        uint64_t shift = OFFSET_WIDTH * (TABLES_DEPTH - 1 - level);
-        uint64_t index = (virtualAddress >> shift) & (PAGE_SIZE - 1); // extract relevant bits
-        addr = physicalAddress(curr_frame, index);
-
-        word_t next_frame;
-        PMread(addr, &next_frame);
-
-        if (next_frame == 0) {
-            // page not mapped, we get the next unused frame
-            // opt1: find a zero table
-
-            int empty_frame = allocateFrame(virtualAddress);
-            printf("created %d \n", empty_frame);
-
-
-            PMwrite(addr,empty_frame);
-
-            //clear child
-            clearFrame(empty_frame);
-
-            next_frame = empty_frame;
+        word_t next;
+        PMread(paddr, &next);
+        if (next == 0 ) {                    // missing table, allocate one
+            next = allocateFrame(virtualAddress);
+            PMwrite(paddr, next);
+            if (level != TABLES_DEPTH-1) {
+                clearFrame(next);
+                printf("created table %d\n", next);
+            }
+            else {
+                printf("created data frame %d\n", next);
+            }
 
         }
-
-        curr_frame = next_frame;
+        curr_frame = next;
     }
 
-    // restore the page from hard disk
-    PMrestore(curr_frame, virtualAddress);
-    return physicalAddress(curr_frame, addr%PAGE_SIZE);
+
+
+    PMrestore(curr_frame, virtualAddress >> OFFSET_WIDTH);  // bring it in
+    return physicalAddress(curr_frame,
+                           virtualAddress & (PAGE_SIZE - 1)); // byte offset
 }
+
 
 
 
