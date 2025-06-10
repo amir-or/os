@@ -51,5 +51,3 @@ void PMevict(uint64_t frameIndex, uint64_t evictedPageIndex);
  * restores a page from the hard drive to the RAM
  */
 void PMrestore(uint64_t frameIndex, uint64_t restoredPageIndex);
-
-void printRam();

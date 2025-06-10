@@ -91,8 +91,10 @@ void dfs(word_t     frame,             // current table frame
     {
         word_t child;
         PMread(physicalAddress(frame, off), &child);
-        if (child == 0)          // <-- safeguard
+        if (child == 0) {
             continue;
+        }
+
 
         bool child_on_path = on_path &&
                              (off == virt_index_at_level(vaddr, depth));
@@ -117,7 +119,7 @@ uint64_t allocateFrame(uint64_t virtualAddress) {
         if (zero_parent != -1 && zero_offset != -1) {
             PMwrite(zero_parent * PAGE_SIZE + zero_offset, 0);
         }
-        clearFrame(zero_candidate);
+        // clearFrame(zero_candidate);
         return zero_candidate;
     }
 
@@ -127,18 +129,10 @@ uint64_t allocateFrame(uint64_t virtualAddress) {
         printf("chose max %d \n", max_frame);
         return max_frame;
     }
-    // Ensure eviction is only attempted after data pages exist
-    if (max_frame <= 1) {
-        printf("Eviction attempted too early (no data pages yet).\n");
-        exit(1);
-    }
+
 
     uint64_t f = max_distant_leaf(virtualAddress);
-    if (f >= NUM_FRAMES) {
-        printf("BUG: allocateFrame got invalid frame %lu\n", f);
-        exit(1);
-    }
-    clearFrame(f);
+    // clearFrame(f);
     return f;
 
 }
@@ -229,8 +223,8 @@ word_t max_distant_leaf(uint64_t virtualAddress) {
                      evict_parent, evict_offset);
 
     if (best_frame >= NUM_FRAMES ||
-    evict_parent == (uint64_t)-1 ||
-    evict_offset == (uint64_t)-1)      // search failed
+        evict_parent == (uint64_t)-1 ||
+        evict_offset == (uint64_t)-1)      // search failed
     {
         return UINT64_MAX;                 // propagate “no frame found”
     }
@@ -267,11 +261,12 @@ uint64_t downTheTree(uint64_t virtualAddress)
         PMread(paddr, &next);
         if (next == 0 ) {                    // missing table, allocate one
             next = allocateFrame(virtualAddress);
-            PMwrite(paddr, next);
             if (level < TABLES_DEPTH-1) {
                 clearFrame(next);
-                assert(isZeroFrame(next));
             }
+
+            // next = allocateFrame(virtualAddress);
+            PMwrite(paddr, next);
 
         }
         curr_frame = next;

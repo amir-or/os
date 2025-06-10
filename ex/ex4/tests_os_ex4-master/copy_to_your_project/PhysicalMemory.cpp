@@ -6,7 +6,6 @@
 #include <unordered_map>
 #include <cassert>
 #include <cstdio>
-#include <iostream>
 
 
 #ifdef INC_TESTING_CODE
@@ -30,12 +29,12 @@ void PMread(uint64_t physicalAddress, word_t* value) {
     assert(physicalAddress < RAM_SIZE);
 
     *value = RAM[physicalAddress / PAGE_SIZE][physicalAddress
-                                              % PAGE_SIZE];
+             % PAGE_SIZE];
 
 #ifdef INC_TESTING_CODE
     Trace::stream() << "PMread(" << physicalAddress << ") = " << *value << std::endl;
 #endif
-}
+ }
 
 void PMwrite(uint64_t physicalAddress, word_t value) {
 #ifdef INC_TESTING_CODE
@@ -48,7 +47,7 @@ void PMwrite(uint64_t physicalAddress, word_t value) {
     assert(physicalAddress < RAM_SIZE);
 
     RAM[physicalAddress / PAGE_SIZE][physicalAddress
-                                     % PAGE_SIZE] = value;
+             % PAGE_SIZE] = value;
 }
 
 void PMevict(uint64_t frameIndex, uint64_t evictedPageIndex) {
@@ -85,15 +84,4 @@ void PMrestore(uint64_t frameIndex, uint64_t restoredPageIndex) {
 
     RAM[frameIndex] = std::move(swapFile[restoredPageIndex]);
     swapFile.erase(restoredPageIndex);
-}
-
-void printRam()
-{
-    for (uint64_t  i = 0; i < RAM_SIZE; i++)
-    {
-        word_t tmp;
-        PMread(i, &tmp);
-        std::cout << i << ": " << tmp << std::endl;
-
-    }
 }
